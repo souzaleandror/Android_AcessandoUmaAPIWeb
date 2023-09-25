@@ -578,3 +578,417 @@ Nesta aula, aprendemos a:
 Adicionar e configurar o Retrofit;
 Implementar e executar requisições HTTP;
 Verificar informações trafegadas nas requisições HTTP.
+
+#### 25/09/2023
+
+@03-Integrando comportamento de busca
+
+@@01
+Salvando produtos da API internamente
+
+Conseguimos carregar os produtos da nossa API web, porém, ao considerarmos esta abordagem, temos que nos atentar a alguns detalhes comuns no dia a dia. Sabemos que, ao executarmos nosso aplicativo, uma Activity acaba sendo destruída facilmente em algumas situações, como no caso de rotação de tela.
+Portanto, precisamos testar tais comportamentos, entretanto, geralmente conseguimos fazê-lo sem nenhum problema por estarmos em um "cenário perfeito", com garantia de conexão, sendo que pode ser que isso não aconteça. No universo mobile, de Android, sabemos que internet é um grande desafio por sua instabilidade, e precisamos saber quando isto acontece e como isto pode ser abordado ao usuário.
+
+Então, se por algum motivo perdermos a conexão à internet no momento em que temos os produtos, o que será que acontece caso a Activity seja destruída? Vamos testar no emulador com modo de avião ativado, rotacionando a tela e verificando o que acontece. É exibida a mensagem "Não foi possível buscar os produtos da API", e não temos mais os produtos que foram carregados pelo menos uma vez para o nosso usuário.
+
+Cada vez mais percebemos que é necessária uma integração com o nosso banco de dados interno, pois é ele que manterá estes dados, uma vez que não temos uma comunicação externa. Durante a implementação, em que fazemos a execução e devolvemos os produtos novos, podemos fazer um processo antes da atualização do Adapter para que eles sejam salvos internamente. Poderemos ter um dao em ListaProdutosActivity.java chamando o método salva(), enviando produtosNovos, nossa lista de produtos recebidos.
+
+new BaseAsyncTask<>(() -> {
+    try {
+        Response<List<Produto>> resposta = call.execute();
+        List<Produto> produtosNovos = resposta.body();
+        dao.salva(produtosNovos);
+        return produtosNovos;
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    return null;
+}, produtosNovos -> {
+// código omitido
+}COPIAR CÓDIGO
+Não temos um método que recebe uma lista, por isso podemos criá-lo com "Alt + Enter", selecionando "Create method 'salva' in 'ProdutoDAO'". Sabemos que o Room dá suporte a @Insert, portanto o incluiremos. Em ProdutoDAO.java, então, teremos:
+
+@Insert
+void salva(List<Produto> produtos);COPIAR CÓDIGO
+Com isso salvamos internamente, e então em vez de devolvermos produtosNovos, o faremos com os produtos do nosso banco de dados:
+
+new BaseAsyncTask<>(() -> {
+    try {
+        Response<List<Produto>> resposta = call.execute();
+        List<Produto> produtosNovos = resposta.body();
+        dao.salva(produtosNovos);
+        return dao.buscaTodos();
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    return null;
+}, produtosNovos -> {
+// código omitido
+}COPIAR CÓDIGO
+Vamos testar no emulador apenas com esta modificação?
+
+Nenhuma informação é carregada, apenas a mesma mensagem de erro que tivemos anteriormente, justamente por não termos acesso à internet. Isso será comum, pois o primeiro acesso é necessário para que pelo menos os produtos sejam carregados. Vamos, então, habilitar a internet, e rotacionar a tela do emulador.
+
+A listagem de produtos é exibida como gostaríamos, mas quando rotacionamos a tela novamente, o aplicativo deixa de funcionar. Consultaremos o Logcat e entenderemos que houve um problema no momento da Async Task. E no banco de dados tivemos um problema de Constraint, que no caso se refere ao ID.
+
+Isso porque estamos tentando salvar novamente um produto que já existe, e isso não é possível. No caso, temos que atualizá-los, ou seja, em vez de simplesmente salvarmos, poderíamos verificar se ele já existe e, sendo este o caso, alteramos, caso contrário, aí sim salvamos.
+
+Para isto usaremos o Room e a técnica para quando houver conflito, a REPLACE, que fará a substituição de acordo com o ID do produto:
+
+@Insert(onConflict = OnConflictStrategy.REPLACE)
+void salva(List<Produto> produtos);COPIAR CÓDIGO
+Isto evitará que usemos ifs; feito isso, reexecutaremos a aplicação. Testaremos os modos de paisagem e retrato no emulador, mas quando reativamos o modo avião, os produtos deixam de ser carregados. Por mais que a busca esteja sendo feita internamente, ela está sendo feita somente quando a requisição não lança nenhuma exceção.
+
+Portanto, em vez de devolver nulo, que seria a alternativa quando a tentativa de requisição falha, devolveríamos o dao.buscaTodos(). Além disso, deste modo não será mais necessário retornar a busca dentro do try, e passamos a ter apenas um retorno, diretamente do banco de dados.
+
+new BaseAsyncTask<>(() -> {
+    try {
+        Response<List<Produto>> resposta = call.execute();
+        List<Produto> produtosNovos = resposta.body();
+        dao.salva(produtosNovos);
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    return dao.buscaTodos();
+}, produtosNovos -> {
+// código omitido
+}COPIAR CÓDIGO
+Feita esta alteração, vamos executar a aplicação novamente. Desta vez, tudo funciona, tanto no modo avião quanto com conexão à internet. A experiência do usuário se mantém intacta, e os produtos são carregados independemente da situação da internet, como esperado.
+
+Então, toda vez que fizermos implementações que envolvam comunicações externas, é importante nos certificarmos de que a experiência do usuário funciona conforme desejado. Esta não é necessariamente uma regra, e em comportamentos como salvar, alterar e remover produtos, talvez faça sentido usarmos outras estratégias, como permitirmos que o produto seja salvo somente online, ou algo assim.
+
+@@02
+Salvando produtos internamente
+
+Caso você precise do projeto com todas as alterações realizadas na aula passada, você pode baixá-lo neste link.
+Modifique o código que busca todos os produtos para que salve os produtos internamente e depois busque todos novamente para que sejam atualizados no adapter.
+
+Para evitar o problema de conflito de ids, adicione a estratégia de substituição ao inserir os produtos.
+
+Faça o teste do App e veja se são apresentados os produtos contidos na API e no banco de dados internamente.
+
+https://github.com/alura-cursos/android-persistencia-web/archive/aula-2.zip
+
+O App deve apresentar as informações da API e banco interno como esperado. O código desta atividade pode ser conferido a partir deste commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/f61f589abba6b26e9e4c9b55836cb0659b7b507b
+
+@@03
+Sincronizando busca de produtos
+
+Resolvemos a situação em que não estávamos carregando os produtos quando destruíamos a Activity e deixávamos de ter conexão a internet. Porém, pode acontecer de a nossa requisição web com a API demorar um pouco, e não testamos este comportamento; precisamos verificar a experiência do usuário neste tipo de contexto, que pode ser bem comum.
+Para isso, acrescentaremos um Thread.sleep() no try de ListaProdutosActivity.java, e depois incluiremos outro catch.
+
+new BaseAsyncTask<>(() -> {
+    try {
+        Thread.sleep(millis: 3000);
+        Response<List<Produto>> resposta = call.execute();
+        List<Produto> produtosNovos = resposta.body();
+        dao.salva(produtosNovos);
+        return produtosNovos;
+    } catch (IOException e) {
+        e.printStackTrace();
+    } catch (InterruptedException e) {
+            e.printStackTrace();
+    }
+    return null;
+}, produtosNovos -> {
+// código omitido
+}COPIAR CÓDIGO
+Testando nosso aplicativo, a lista de produtos é carregada após 3 segundos, depois de exibir uma tela em branco, então, por mais que estejamos fazendo a requisição, ainda estamos suscetíveis a esta demora, comprometendo a experiência do usuário. Uma abordagem inicial que podemos tentar é executar a Async Task que tínhamos anteriormente, que carregava todos os produtos de imediato, internamente.
+
+Assim, quando buscaProdutos() for chamado, será feita uma Async Task para uma busca externa, seguida por uma interna e uma notificação, e em paralelo será executada uma Async Task que fará uma busca interna, fazendo a atualização do que demorar para ser carregado.
+
+Inclusive, para verificarmos se tudo funciona da maneira esperada, podemos remover alguns dos produtos internamente. Executaremos a aplicação mais uma vez, e internamente teremos apenas um produto, enquanto externamente, todos. O que esperamos é que se carregue primeiro o único produto, e depois os demais.
+
+O programa quebrou! Precisamos entender o motivo disso a partir da exceção que aparece no Logcat. Aparentemente, houve certa inconsistência, uma View inválida a partir do View holder, uma posição indesejada. Dado que fazemos a notificação atualiza(resultado) em nosso Adapter, existe uma situação na qual buscamos de maneira "simultânea", e a notificação é realizada sendo que o tamanho da lista é diferente.
+
+A notificação que temos vai de 0 (zero) até o tamanho da lista atual, então pode ser que os tamanhos interno e externo sejam distintos. Sendo assim, precisamos tomar alguns cuidados, como evitar a abordagem de dizer o tamanho, já que temos como fazer uma atualização rápida ou simultaneamente.
+
+Além disso, podemos indicar que ao acessar atualiza(), toda a notificação de dataset seja limpada, e antes disso, incluir notifyItemRangeRemoved() em ListaProdutosAdapter.java:
+
+public void atualiza(List<Produto> produtos) {
+    notifyItemRangeRemoved(positionStart: 0, this.produtos.size());
+    this.produtos.clear();
+    this.produtos.addAll(produtos);
+    this.notifyItemRangeInserted(positionStart: 0, this.produtos.size());
+}COPIAR CÓDIGO
+Então, quando trabalhamos com dois procedimentos que são executados "simultaneamente" corremos este risco. Executaremos a aplicação via emulador novamente; a tela em branco é exibida, depois ocorrem dois loads estranhos. Inicialmente, removeremos os dois produtos novamente, e faremos a execução mais uma vez.
+
+Desta vez, os três produtos são carregados, e depois isto se repete. Por mais que tenhamos as Async Tasks, elas não estão executando em paralelo. Isso quer dizer que, quando executamos várias Async Tasks, elas formam uma fila de execução em uma Thread separada, em background, e cada uma delas entrará em uma fila.
+
+Isto é, a segunda Async Task só será executada após a finalização da primeira. Assim, a UI Thread chama uma Async Task 1, e também uma Async Task 2. Ambas entrarão em uma Thread em segundo plano (Default background thread), e a primeira é executada. Enquanto isto, a segunda ficará aguardando, e só depois que a primeira é finalizada, e notifica isto, aí sim a segunda Thread entra em execução, e assim sucessivamente.
+
+Assim, da maneira como estamos fazendo, se uma Async Task demorar, as outras serão comprometidas, e é assim que elas funcionam por padrão. Portanto, vemos que deste modo não conseguimos resolver nosso problema. Queremos que esta execução, que pode demorar, realmente saia desta fila, e não prenda as demais Async Tasks, como é o caso da busca interna.
+
+Para isso, em vez de chamarmos execute(), que é quem faz o envio para a Thread em background, chamaremos executeOnExecutor(), com que precisaremos enviar mais um argumento indicando o Executor. Trata-se de uma implementação que será basicamente uma nova Thread.
+
+Usaremos uma implementação própria do Async Task, uma constante denominada THREAD_POOL_EXECUTOR, ou seja, uma execução fora do padrão, e que não entrará na fila:
+
+new BaseAsyncTask<>(() -> {
+    try {
+        Thread.sleep(millis: 3000);
+        Response<List<Produto>> resposta = call.execute();
+        List<Produto> produtosNovos = resposta.body();
+        dao.salva(produtosNovos);
+        return produtosNovos;
+    } catch (IOException e) {
+        e.printStackTrace();
+    } catch (InterruptedException e) {
+            e.printStackTrace();
+    }
+    return null;
+}, produtosNovos -> {
+    if(produtosNovos != null) {
+        adapter.atualiza(produtosNovos);
+    } else {
+        Toast.makeText(context: this,
+                    text: "Não foi possível buscar os produtos da API",
+                    Toast.LENGTH_SHORT).show();
+    }
+}).executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);COPIAR CÓDIGO
+Vamos executar o emulador e ver o que acontece?
+
+De imediato, perceberemos que os produtos são carregados, e após 3 segundos, eles virão com os produtos da API. Podemos remover os produtos internamente, e verificar o resultado. Ao executarmos mais uma vez, apenas o produto interno é carregado, e após 3 segundos, os demais surgem na listagem.
+
+Porém, precisamos ficar atentos pois isto pode ocorrer do lado interno, pois podemos ter apenas um produto internamente e, no caso, conseguiremos fazer o load deles. Para isso, utilizaremos uma expressão lambda:
+
+new BaseAsyncTask<>(() -> {
+    List<Produto> produtosInterno = dao.buscaTodos();
+    try {
+        Thread.sleep(millis: 3000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+    return produtosInterno;
+},COPIAR CÓDIGO
+Entretanto, a notificação ainda será um tanto demorada. Vamos simular uma situação na qual a busca interna demorará um pouco mais, e não a externa. Inclusive diminuiremos o tempo de Thread.sleep() do try de BaseAsyncTask anterior para 1 segundo. Já sabemos que internamente há apenas um produto, e externamente, três.
+
+Executando a aplicação, teremos uma lista vazia, seguida de uma lista com três produtos, e depois um. Tivemos um comportamento totalmente inesperado, estamos sendo comprometidos pelo tempo de execução da nossa Async Task. Quando temos procedimentos que serão executados em paralelo e exigirão algum tipo de regra de sincronismo, precisaremos ordenar quando cada um deles será executado, chamar o que precisa ser chamado, e assim por diante.
+
+Neste caso em específico, podemos pensar que a busca interna precisa ser feita de qualquer forma, e ela tende a demorar menos. Sendo finalizada, ela deverá chamar a busca externa. Assim, removeremos o bloco Try/Catch com produtosInterno, e após a atualização do nosso Adapter, faremos a Async Task responsável pela busca externa. E então moveremos todo o código referente à atualização externa de modo a deixar o código da seguinte forma:
+
+new BaseAsyncTask<>(dao::buscaTodos,
+    resultado -> {
+        adapter.atualiza(resultado);
+        new BaseAsyncTask<>(() -> {
+            try {
+                    Thread.sleep(millis: 3000);
+                    Response<List<Produto>> resposta = call.execute();
+                    List<Produto> produtosNovos = resposta.body();
+                    dao.salva(produtosNovos);
+                    return produtosNovos;
+            } catch (IOException e) {
+                    e.printStackTrace();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            return null;
+    }, produtosNovos -> {
+        if(produtosNovos != null) {
+            adapter.atualiza(produtosNovos);
+        } else {
+            Toast.makeText(context: this,
+                        text: "Não foi possível buscar os produtos da API",
+                        Toast.LENGTH_SHORT).show();
+        }
+    }).executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+        })
+    .execute();COPIAR CÓDIGO
+Feito isso, executaremos o aplicativo e verificaremos o que acontece. Para testarmos aquele mesmo comportamento com que lidamos recentemente, removeremos os dois últimos produtos e executaremos mais uma vez. Agora, sim, temos a listagem de um produto, e após 3 segundos, são carregados externamente os outros dois.
+
+Aproveitaremos para testar no modo avião também, e os produtos estão sendo mantidos conforme gostaríamos. Então, após o carregamento interno dos produtos, é feita a busca externa, fazemos a sincronização necessária, e tudo o mais, para que se mantenham os produtos novos.
+
+@@04
+Sobre a execução de AsyncTask
+
+Ao implementar o código que integra o App com a API para buscar produtos, vimos que existem peculiaridades na execução de AsyncTasks simultaneamente. Marque as alternativas corretas em relação aos detalhes de AsyncTask:
+
+AsyncTask opera de maneira síncrona ou assíncrona.
+ 
+Exato! Cada vez que usamos AsyncTasks precisamos pensar no que será executado, o quanto costuma demorar, e se é desejada a sincronia entre outras AsyncTasks.
+Alternativa correta
+Executar duas ou mais AsyncTask podem travar a UI.
+ 
+Alternativa correta
+AsyncTask cria uma thread nova cada vez que é executada.
+ 
+Alternativa correta
+AsyncTask executadas simultaneamente são executadas na mesma Thread.
+ 
+Isso mesmo! Por padrão as AsyncTasks são executadas como uma fila de execução: enquanto a primeira não for finalizada, as demais não são executadas.
+
+@@05
+Aplicando estratégia de busca de produtos
+
+Modifique o código para que primeiro busque os produtos internos e depois faça a busca na API web.
+Para esta atividade considere os seguintes pontos:
+
+Delay na busca na API para verificar se os produtos internos são carregados logo de cara;
+Execução da busca na API em uma thread separada das AsyncTasks;
+Corrigir o problema no adapter do RecyclerView por notificar atualização mais de uma vez rapidamente.
+Teste o App e veja se apresenta os comportamentos esperados. Para verificar se primeiro busca internamente, remova produtos que estão contidos apenas na API.
+
+O App deve rodar sem nenhum problema apresentando os produtos internos inicialmente e depois do delay apresentando os produtos contidos na API. O código desta atividade pode ser conferido a partir deste commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/cca30f2d451c0b16186ac38f6c05311117b65208
+
+@@06
+Refatorando o código
+
+Feita a primeira integração entre a aplicação e a API, podemos partir para a refatoração do nosso código, que atualmente possui certa complexidade, e precisamos deixá-lo o mais simples possível, com base no que é estritamente necessário. Vamos começar identificando o que cada uma destas Async Tasks fazem, nomeando-as.
+A mais interna delas busca os produtos na API, portanto selecionaremos toda a Async Task e a extrairemos para um método, o buscaProdutosNaApi. Assim, fica muito mais tranquilo entender que, após a atualização do Adapter, buscamos os produtos na API.
+
+Da mesma forma, extrairemos a segunda Async Task para buscaProdutosInternos, entretanto temos alguns detalhes, pois colocamos a call antes mesmo de chamarmos este método, sendo que este recebe a call, necessária apenas em buscaProdutos(). Portanto, a chamada abaixo poderá ser migrada para dentro de buscaProdutosNaApi.
+
+ProdutoService service = new EstoqueRetrofit().getProdutoService();
+Call<List<Produto>> call = service.buscaTodos();COPIAR CÓDIGO
+Assim, não precisamos mais dos parâmetros Call<List<Produto>> call:
+
+private void buscaProdutosNaApi() {
+    ProdutoService service = new EstoqueRetrofit().getProdutoService();
+    Call<List<Produto>> call = service.buscaTodos();
+// código omitido
+}COPIAR CÓDIGO
+Tampouco precisamos de argumentos, então deletaremos Call<List<Produto>> call e call do buscaProdutosNaApi() de buscaProdutosInternos(). Também removeremos call de buscaProdutosInternos() de buscaProdutos(). A chamada de busca de produtos fica muito mais limpa.
+
+Agora, lidaremos com buscaProdutosNaApi(), que possui complexidades que podem ser evitadas, como no caso de Thread.sleep(millis: 3000), o qual deletaremos. Também removeremos o segundo catch de BaseAsyncTask, e a verificação de nulo, pois o colocamos quando fazíamos o retorno direto de produtosNovos.
+
+Mas quando fazemos a busca internamente via dao, sempre retornaremos uma referência de uma lista, seja ela vazia ou não. Além disso, podemos realizar a atualização diretamente.
+
+new BaseAsyncTask<>(() -> {
+    try {
+        Response<List<Produto>> resposta = call.execute();
+        List<Produto> produtosNovos = resposta.body();
+        dao.salva(produtosNovos);
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    return dao.buscaTodos();
+}, produtosNovos -> 
+            adapter.atualiza(produtosNovos))
+            .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);COPIAR CÓDIGO
+Nosso código fica muito mais enxuto e simples de ser compreendido. Vamos executar a aplicação e verificar se tudo funciona conforme esperado. O primeiro teste será confirmar se o único produto existente no banco de dados é carregado, o que ocorre sem problemas. Depois, rotacionaremos a tela, e também não temos nenhuma queixa. Ativaremos a internet e verificaremos que os produtos da API são carregados, rotacionaremos a tela do emulador mais uma vez, colocaremos no modo avião e veremos se o comportamento esperado se mantém.
+
+Um detalhe, comentado desde o começo dos cursos de fundamentos de Android, é que, por mais que estejamos buscando produtos na Activity, ela está com responsabilidades demais, tendo que identificar se a busca é interna ou não, código de requisições HTTP, entre outras tarefas que ela não deveria ter.
+
+De modo geral, a Activity serve como uma controladora, como comentado anteriormente. No máximo, ela estará atualizando seus componentes visuais, então, a seguir veremos como extrair todo o código para uma única classe, capaz de manter responsabilidades para se comunicar com a Activity, flexibilizando esta solução.
+
+@@07
+Refatorando o código de busca de produtos
+
+Refatore o código de busca de produtos interno e também da API. Para a refatoração considere técnicas de extração de código, remoção de códigos desnecessários.
+Por fim, teste o App após refatoração e veja se tudo funciona como esperado.
+
+O App deve funcionar como esperado, o código pode ser conferido a partir deste commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/587e85ffb3828acc34498b0084d12645d569e532
+
+@@08
+Criando um repositório
+
+Identificamos a necessidade de migrar os comportamentos de busca de produtos internos e na API para uma classe. Mas qual será a nova classe que manterá estas duas responsabilidades, dado que seu objetivo é manter apenas uma? Considerando ideias provenientes de arquitetura de software, componentes comuns em diversos tipos de projeto, existe um componente bastante utilizado nestes casos.
+Ele é conhecido como repositório, ou Repository, em inglês, e lidará com a questão da origem dos dados, enviando-a para quem solicitar. Então, criaremos um repositório a ser mantido pela Activity, que pedirá os dados para ele, e a lógica é mantida seja na API, no banco de dados, ou em qualquer tipo de outra solução que armazene as informações dos nossos produtos. Ou seja, incluiremos esta camada a mais em nosso aplicativo.
+
+Para a implementação, acessaremos "app > java", e com "br.com.alura.estoque" selecionado, usaremos "Alt + Insert" para buscar por package. O nome dele será repository, e em seguida criaremos a classe denominada ProdutoRepository, e então migraremos os métodos de ListaProdutosActivity.java, copiando e colando. Fazemos os importes e temos acesso a todos os comportamentos que a Activity não precisará mais ter, referentes a buscaProdutosNaApi(), buscaProdutosInternos() e buscaProdutos().
+
+Feito isso, teremos que resolver alguns detalhes. Começaremos modificando a Activity — em vez de chamarmos buscaProdutos() como se fosse o membro interno da Activity, criaremos uma instância do Repository, e utilizaremos um método seu, chamado de repository:
+
+EstoqueDatabase db = EstoqueDatabase.getInstance(this);
+dao = db.getProdutoDAO();
+
+ProdutoRepository repository = new ProdutoRepository();
+repository.buscaProdutos();COPIAR CÓDIGO
+Aproveitaremos para deixarmos o método buscaProdutos() como público, e vamos fazendo ajustes conforme necessário. Precisamos adaptar nosso código para que todos os procedimentos necessários ocorram e, quando for o caso, notifiquemos a Activity para que ela consiga atualizar suas informações.
+
+O Repository é um componente que lidará apenas com os dados, portanto chamadas como atualiza() do Adapter, por exemplo, precisa ser feita para quem estiver chamando o Repository, o qual não terá este tipo de responsabilidade. Inclusive, substituiremos a linha adapter.atualiza(resultado) de buscaProdutosInternos() por // notifica que o dado está pronto.
+
+Da mesma forma, em buscaProdutosNaApi(), também removeremos adapter.atualiza(produtosNovos) e deixaremos em seu lugar //notifica que o dado está pronto. No caso do DAO, será uma dependência, portanto criaremos um atributo de tipo ProdutoDAO. Podemos recebê-lo via construtor sem nenhum problema, ou então pedir um contexto, e criar um banco de dados.
+
+Se for o caso, posteriormente fazemos a refatoração para que ele receba o contexto, e montamos o banco de dados, mas por ora faremos assim:
+
+public class ProdutoRepository {
+
+    private final ProdutoDAO dao;
+
+    public ProdutoRepository(ProdutoDAO dao) {
+        this.dao = dao;
+    }
+// código omitido
+}COPIAR CÓDIGO
+Agora que temos nosso DAO, precisamos fazer alguns ajustes para conseguirmos notificar a Activity, pois do jeito em que está, o buscaProdutos() é chamado, são feitas todas as operações, a busca na API, salvando internamente e depois buscando no banco de dados interno, mas em nenhum momento é feita uma notificação no Adapter.
+
+Utilizaremos a mesma técnica aplicada em Listeners, sendo assim teremos um Listener próprio para o repositório. Ainda em ProdutoRepository.java, então, teremos:
+
+public interface ProdutosCarregadosListener {
+    void quandoCarregados(List<Produto> produtos);
+}COPIAR CÓDIGO
+Teremos que reutilizar este Listener nos pontos em que esta notificação é necessária, e a Activity o implementará e fará a atualização. Podemos criar um atributo ProdutosCarregadosListener, pedindo isto via construtor. Assim, nosso ProdutoRepository será uma classe que fará todos os comportamentos envolvidos na persistência dos produtos, seja interna ou externamente, e não apenas manterá a busca deles.
+
+private final ProdutoDAO dao;
+private final ProdutosCarregadosListener listener;
+
+public ProdutoRepository(ProdutoDAO dao,
+                                                ProdutosCarregadosListener listener) {
+    this.dao = dao;
+    this.listener = listener;
+}COPIAR CÓDIGO
+Então, ações como salvar, editar e remover um produto também serão migradas para esta classe. E se colocarmos um Listener que apenas atualiza o Adapter como se fosse uma lista de produtos que estão sendo recebidos, ficaremos limitados e atrelados a este tipo de solução. Portanto, em vez de recebermos um Listener dentro do construtor cada vez que instanciarmos um Repository, receberemos no momento em que chamamos os nossos produtos, isto é, os buscamos.
+
+Neste momento, pediremos ao nosso cliente, que no caso é a nossa Activity, para que ela faça a implementação do Listener. Desta maneira flexibilizamos este tipo de abordagem, então manteremos o código da seguinte forma:
+
+private final ProdutoDAO dao;
+
+public ProdutoRepository(ProdutoDAO dao) {
+    this.dao = dao;
+}COPIAR CÓDIGO
+Assim, mantemos uma única instância e, para cada comportamento, colocaremos o listener desejado, que teremos que delegar para os comportamentos mais internos, como é o caso da busca interna:
+
+public void buscaProdutos(ProdutosCarregadosListener listener) {
+    buscaProdutosInternos(listener);
+}COPIAR CÓDIGO
+Agora que estamos recebendo este Listener, trocaremos // notifica que o dado está pronto de buscaProdutosInternos() por listener.quandoCarregados(resultado), e é assim que delegamos para a nossa Activity, algo necessário também em buscaProdutosNaApi():
+
+private void buscaProdutosInternos(ProdutosCarregadosListener listener) {
+    new BaseAsyncTask<>(dao::buscaTodos,
+                    resultado -> {
+                        listener.quandoCarregados(resultado);
+                        buscaProdutosNaApi(listener);
+                    }).execute();
+}COPIAR CÓDIGO
+E quando for para identificar que houve algo notificável à Activity, quando temos produtos novos, teremos:
+
+new BaseAsyncTask<>(() -> {
+    // trecho com try, catch e return omitidos
+}, listener::quandoCarregados)
+            .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);COPIAR CÓDIGO
+Esta abordagem é mais interessante inclusive por permitir Method references em vez de uma expressão lambda verbosa. Feito isso, acessaremos a Activity, deletaremos listener de nosso construtor:
+
+EstoqueDatabase db = EstoqueDatabase.getInstance(this);
+dao = db.getProdutoDAO();
+
+ProdutoRepository repository = new ProdutoRepository(dao);
+repository.buscaProdutos(adapter::atualiza);COPIAR CÓDIGO
+Fizemos uma refatoração um pouco mais complexa que exige um pouco mais de compreensão do que está sendo feito, e então podemos executar o aplicativo. Vamos fazer testes similares aos feitos anteriormente, mas começaremos verificando se ele não quebra, depois removeremos dois produtos, que são da API, e manteremos apenas um internamente.
+
+Não tivemos nenhum problema, e deixamos o código muito mais limpo e elegante. A seguir veremos como migrar outros comportamentos.
+
+@@09
+Migrando o código para o repositório
+
+Crie um repositório para manter o código de busca de produtos interno e na API. Nesta implementação faça com que o repositório lide apenas com os dados e notifique quem o chamar que o dado ficou pronto.
+Você pode usar listeners para notificar quando o dado está pronto.
+Após migração, execute o App e veja se é mantido o mesmo comportamentos de antes.
+
+Deve ser mantido o mesmo comportamento de antes, a diferença é que a responsabilidade de pegar os produtos da fonte (banco de dados interno ou API) fica apenas no repositório. Você pode conferir o código a partir deste commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/ae2fecdbb2cfc88db5c3cf0ec89377961e4607d8
+
+@@10
+O que aprendemos?
+
+Nesta aula, aprendemos a:
+Integrar o comportamento de busca de produtos com a API;
+Aplicar estratégias de integração;
+Peculiaridades de sincronismo entre AsyncTask;
+Criação e utilização de repositórios.
