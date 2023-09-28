@@ -2,6 +2,13 @@
 
 Curso de Android: acessando uma API Web
 
+```
+java -jar server.jar.
+
+lsof -i:8080
+Kill -9
+```
+
 @01-Entendendo o problema da persistência interna
 
 @@01
@@ -992,3 +999,334 @@ Integrar o comportamento de busca de produtos com a API;
 Aplicar estratégias de integração;
 Peculiaridades de sincronismo entre AsyncTask;
 Criação e utilização de repositórios.
+
+#### 27/09/2023
+
+@@01
+Criando listener genérico
+
+Da mesma forma como migramos o comportamento de buscar os produtos, vamos fazer com os demais que envolvam o banco de dados, como no caso da remoção, de salvar e da edição. Tudo isso irá para ProdutoRepository, que ficará responsável por lidar com os dados e suas fontes. Começaremos com o comportamento de salvar, e então vamos testando e partimos para a integração com a nossa API.
+Recortaremos o trecho abaixo, de ListaProdutosActivity.java:
+
+private void salva(Produto produto) {
+    new BaseAsyncTask<>(() -> {
+        long id = dao.salva(produto);
+        return dao.buscaProduto(id);
+    }, produtoSalvo ->
+                adapter.adiciona(produtoSalvo))
+                .execute();
+}COPIAR CÓDIGO
+E colaremos em ProdutoRepository.java, logo antes do trecho de código referente a ProdutosCarregadosListener. E então substituiremos a linha adapter.adiciona(produtoSalvo) por //notificar que dado está pronto. E passaremos a utilizar o repositório no momento em que chamávamos o salva.
+
+Porém, para reutilizarmos o repositório em todos os membros da Activity, o primeiro passo é criar seu atributo (repository) no lugar de uma variável local no onCreate() com "Ctrl + Alt + F":
+
+repository = new ProdutoRepository(dao);
+repository.buscaProdutos(adapter::atualiza);COPIAR CÓDIGO
+E quando fazemos a configuração do dialog para salvarmos um produto, ele recebe um Listener como segundo argumento, então, basicamente, ele envia um produto que foi criado em nosso dialog, e portanto o colocamos como Method reference. Agora que sabemos que estamos criando um produto, que podemos chamar de produtoCriado, abriremos uma expressão lambda para facilitar a compreensão do que acontecerá aqui, usando o repository chamando o salva().
+
+private void abreFormularioSalvaProduto() {
+    new SalvaProdutoDialog(context: this, produtoCriado -> {
+        repository.salva(produtoCriado);
+    }).mostra();
+}COPIAR CÓDIGO
+Em seguida precisaremos fazer alguns ajustes para adaptação conforme o necessário. Vamos alterar o modificador de acesso (salva), que está como private e precisa estar como public. Isso faz com que o código compile corretamente, depois, faremos com que a Activity seja notificada, para conseguir fazer a atualização desejada, do Adapter.
+
+Para isso, utilizaremos a estratégia de acrescentar um Listener, porém, teremos um problema se usarmos ProdutosCarregadosListener, pois aqui não teremos uma lista de produtos para que seja adicionada em nosso Adapter, em que incluiremos um único produto, e com este Listener não temos como fazê-lo.
+
+Dado que queremos justamente flexibilizar o uso do nosso Listener para n outras situações, uma das abordagens que podemos considerar é criar um Listener genérico. Da mesma forma como criamos uma Async Task genérica, implementaremos uma interface genérica que pode receber qualquer tipo, o FinalizadaListener:
+
+public interface FinalizadaListener<T> {
+    void quandoFinalizada(T resultado);
+}COPIAR CÓDIGO
+Vamos, então, alterar o nome da interface ProdutosCarregadosListener em ProdutoRepository.java:
+
+public interface DadosCarregadosListener <T> {
+    void quandoCarregados(T resultado);
+}COPIAR CÓDIGO
+Desta forma deixamos de uma maneira muito genérica, podemos enviar produtos, e assim por diante. O T vem do Type, que no caso é tipo genérico. Agora, temos um DadosCarregadosListener, que recebe um tipo genérico. E em vez de utilizarmos o Listener que fica bem definido e sempre receberá uma lista de produtos, definiremos em cada um dos parâmetros o que esperamos para este tipo de interface.
+
+Começando por buscaProdutos(), esperamos que o Listener devolva uma lista de produtos via Generics:
+
+public void buscaProdutos(DadosCarregadosListener<List<Produto>> listener) {
+    buscaProdutosInternos(listener)
+}COPIAR CÓDIGO
+Faremos o mesmo para os demais Listeners, que prometem devolver uma lista de produtos, isto é, buscaProdutosInternos() e buscaProdutosNaApi(). E em salva(), utilizaremos novamente DadosCarregadosListener, incluindo um produto apenas. Além disso, faremos a notificação enviando produtoSalvo, a ser carregado em nosso Adapter, e que pode ser um Method reference.
+
+public void salva(Produto produto,
+                            DadosCarregadosListener<Produto> listener) {
+    new BaseAsyncTask<>(() -> {
+        long id = dao.salva(produto);
+        return dao.buscaProduto(id);
+    }, listener::quandoCarregados)
+                    .execute();
+}COPIAR CÓDIGO
+Feito este ajuste, temos todo o poder de reutilizarmos a mesma solução em vários casos diferentes. Voltaremos a ListaProdutosActivity.java para implementarmos produtoSalvo como Method reference.
+
+private void abreFormularioSalvaProduto() {
+    new SalvaProdutoDialog(context: this, produtoCriado ->
+        repository.salva(produtoCriado, adapter::adiciona))
+        .mostra();
+}COPIAR CÓDIGO
+Antes de passarmos à integração, vamos testar a aplicação. No caso, a inserção do produto só será realizada de maneira local, no banco de dados interno, e iremos para o externo posteriormente. Testaremos salvando um computador de preço 2000 e quantidade 10, rotacionando a tela do emulador, e não temos nenhum problema.
+
+A migração foi bem sucedida, a partir de uma solução genérica para reutilizar a ideia do Listener sendo que é possível obtermos resultados diferentes, como no caso de um produto a ser devolvido, ou uma lista de produtos.
+
+@@02
+Migrando o comportamento de salvar
+
+Caso você precise do projeto com todas as alterações realizadas na aula passada, você pode baixá-lo neste link.
+Migre o comportamento de salvar produto para que seja responsabilidade do repositório da mesma forma que foi feito com o comportamento de buscar produtos.
+
+Nesta migração, considere renomear de membros existentes para melhorar a coesão.
+
+Após migração teste o App e veja se a inserção de produtos de maneira offline funciona como esperado.
+
+https://github.com/alura-cursos/android-persistencia-web/archive/aula-3.zip
+
+O comportamento de salvar deve funcionar como antes, a diferença é que a Activity não mantém mais essa responsabilidade. Você pode conferir o código desta atividade a partir deste commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/7ebab970d6dcf14a57ba79bb68d7909cef773fae
+
+@@03
+Utilizando callbacks do Retrofit
+
+Feita a migração do comportamento de salvar para o nosso repositório, faremos o código que vai integrar este comportamento com a nossa API. Será uma abordagem muito similar ao que fizemos quando buscamos os produtos da API, portanto começaremos criando uma requisição. Em ProdutoService.java criaremos um método chamado salva(), que retornará uma Call, seguindo o padrão conforme a implementação atual do Retrofit.
+Precisamos fazer uma requisição que irá atender ao que nossa API espera, POST, a receber um produto via corpo da requisição, devolvendo um produto com ID esperado, isto é, gerado na API. Definiremos o tipo, @POST, que terá o endereço produto. A novidade aqui é entendermos como enviaremos o nosso objeto produto via corpo da requisição.
+
+Isto será feito via parâmetro, e indicaremos o que ele significa dentro da requisição. Já que ele fará parte do corpo, teremos uma notação @Body, e então definiremos o retorno de um único produto, portanto usaremos um Generics. O trecho de código ficará da seguinte maneira:
+
+public interface ProdutoService {
+
+    @GET("produto")
+    Call<List<Produto>> buscaTodos();
+
+    @POST("produto")
+    Call<Produto> salva(@Body Produto produto);
+}COPIAR CÓDIGO
+Em seguida, reutilizaremos esta requisição em nosso repositório, então, replicaremos o que foi feito anteriormente em buscaProdutosNaApi() em salva(). Porém, para conseguirmos acessar a Call, também precisamos acessar o service, o que fazemos em mais de um lugar, e basta uma única instância para isto, o tornaremos um membro da nossa classe, do repositório, sendo um atributo.
+
+Assim, recortaremos a linha ProdutoService service = new EstoqueRetrofit().getProdutoService() de buscaProdutosNaApi() e, a colaremos no momento em que construímos a nossa classe, em ProdutoRepository.java, tornando o service acessível via atributo de classe:
+
+public ProdutoRepository(ProdutoDAO dao) {
+    this.dao = dao;
+    service = new EstoqueRetrofit().getProdutoService();
+}COPIAR CÓDIGO
+Faremos a implementação em salva() considerando a estratégia que optaremos para o comportamento de salvar um produto, dentre podermos salvar na API, o que traz um retorno que salvamos internamente, e que é atualizado no Adapter, ou salvar internamente, atualizar no Adapter e depois enviar à API.
+
+Dado que estaremos alterando uma informação, e que elas sempre são pegas da API, primeiramente salvaremos na API e nos certificaremos disso, para depois buscarmos estas informações, caso contrário teremos certa inconsistência de dados. Por exemplo, se de repente ficarmos offline e salvarmos o primeiro produto quando na API já existem 5, quando a conexão for restabelecida, buscaremos todos os dados da API, e ela irá sobrescrever o produto recém criado.
+
+Claro, existem técnicas e sincronias para tornar isso possível de ser feito offline, mas isso exige um pouco mais de tempo e conhecimento que não serão vistos neste curso. É por isto que optaremos por salvar, editar e remover tudo na API, e quando tivermos certeza de que isto foi feito lá, fazemos o mesmo internamente.
+
+Inicialmente será apenas a busca que deixaremos funcionando internamente, para depois passarmos à busca na API. Para esta implementação, chamaremos salva() em service enviando o produto recebido, e teremos a Call com todo o comportamento de requisição, como por exemplo criar uma Async Task.
+
+Entretanto, como comentado anteriormente, além de fazer uma execução síncrona com execute(), também temos a opção da execução assíncrona, o que é esperado no caso de uma requisição, pois este processo pode acabar demorando, seja por lentidão da internet ou outras questões que envolvam uma comunicação externa.
+
+Então, vamos entender como fazer tal implementação para que também não seja necessário nos atentarmos à parte do executeOnExecutor() da Async Task. Chamaremos a call e o método enqueue(), que fará a execução de maneira assíncrona, sem precisarmos de uma Async Task. Ele exige uma interface chamada Callback, que sempre receberá o Generics que temos em nossa Call, englobando um produto.
+
+Trata-se de uma implementação que inclui dois comportamentos: onResponse() e onFailure(). No primeiro, significa que conseguimos nos comunicar com o banco de dados com sucesso, porém não necessariamente o resultado será o esperado. No segundo, tentamos fazer uma comunicação e tivemos um erro; pode ocorrer, por exemplo, de conseguirmos nos comunicar com o servidor, mas ele nos devolver um código de erro do HTTP. Se tentamos nos comunicar, mas isto resultar em um Timeout, também cairemos no onFailure().
+
+Ambos são executados na UI Thread, sendo assim temos o mesmo resultado obtido no onPostExecute(), na interface listener::quandoCarregados. Ou seja, são comportamentos que podemos delegar diretamente à nossa Activity. Então, em onResponse(), teremos o mesmo comportamento de quando pegamos a resposta, isto é, acessar body(), verificando se ele carrega as informações esperadas, e notificar. Não precisamos retornar nada.
+
+public void salva(Produto produto,
+        DadosCarregadosListener<Produto> listener) {
+    Call<Produto> call = service.salva(produto);
+    call.enqueue(new Callback<Produto>() {
+        @Override
+        public void onResponse(Call<Produto> call,
+                                                    Response<Produto> response) {
+            Produto produtoSalvo = response.body();
+            listener.quandoCarregados(produtoSalvo);
+        }
+
+        @Override
+        public void onFailure(Call<Produto> call,
+                    Throwable t) {
+        }
+    });
+    // código omitido
+}COPIAR CÓDIGO
+Já que recebemos o produto, podemos optar por salvar internamente e só depois notificarmos. Portanto, substituiremos a linha listener.quandoCarregados(produtoSalvo) pelo seguinte trecho, que recortaremos de onde estava:
+
+new BaseAsyncTask<>(() -> {
+    long id = dao.salva(produto);
+    return dao.buscaProduto(id);
+}, listener::quandoCarregados)
+            .execute();COPIAR CÓDIGO
+Ele pegará o produtoSalvo proveniente da nossa API, que salvaremos internamente — então, substituiremos produto de dao.salva() do trecho acima por produtoSalvo. Outro detalhe, quando utilizamos o enqueue(), não precisamos chamar o execute() feito na Async Task. Além disso, sua Thread não é própria da Async Task, e sim uma nova Thread, desvinculada, executada em paralelo.
+
+Vamos executar a aplicação para verificar se ela funciona da maneira esperada. Lembrando que, por conta da implementação que fizemos até aqui, não conseguiremos salvar os nossos produtos de maneira offline. E já que não salvamos o produto computador, que criamos anteriormente, iremos removê-lo para criarmos novamente.
+
+A princípio, não temos nenhum problema, e conseguimos rotacionar a tela também, como gostaríamos. Então, iremos remover o computador da lista mais uma vez, e verificaremos se conseguimos acessá-lo, pois se a remoção for feita internamente, deixamos de ter acesso a ele, mas como a remoção só está sendo feita internamente, mas mantemos na API, ele deve permanecer como está ao rotacionarmos a tela.
+
+Feito o teste, constatamos que conseguimos salvar o produto com sucesso. Podemos testar salvar o produto offline mesmo sabendo que isso não irá funcionar. É muito importante testarmos tudo que for colocado no aplicativo, especialmente em se tratando de implementações que têm integração entre a API e a solução externa, ou interna, pois é o ponto mais complexo do aplicativo.
+
+Logo mais identificaremos alguns pontos de melhoria do nosso código.
+
+@@04
+Salvando o produto na API
+
+Ajuste o comportamento de salvar do repositório para que primeiro salve o produto na API para depois salvar internamente. Nesta implementação ao invés de usar a AsyncTask, utilize o enqueue().
+Lembre-se que as chamadas da interface Callback do Retrofit (onResponse() e onFailure()) são executadas na UI Thread.
+Após finalizar, teste o App e veja se ao salvar o produto ele é salvo na API e internamente. O App não deve salvar o produto caso esteja sem conexão com a API.
+
+O comportamento de salvar deve funcionar como o esperado. Você pode conferir o código a partir deste commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/00f8ee01a32248d54298ca56c89b4360f87b8f24
+
+@@05
+Refatorando o Callback
+
+Feita a primeira implementação do Callback, aproveitaremos para fazermos uma refatoração no nosso código, e destacar alguns pontos de atenção neste tipo de implementação. Começaremos por algumas extrações de código, como é o caso da Async Task que salva o nosso produto internamente, em onResponse() de ProdutoRepository.java.
+Para isso, selecionaremos o trecho abaixo:
+
+new BaseAsyncTask<>(() -> {
+    long id = dao.salva(produtoSalvo);
+    return dao.buscaProduto(id);
+}, listener::quandoCarregados)
+        .execute();COPIAR CÓDIGO
+E o extrairemos para ProdutoRepository, em vez da nossa classe anônima, e o chamaremos de salvaInterno. Podemos inclusive alterar o nome do parâmetro, de produtoSalvo para produto, simplesmente. Deste modo, o código ficará da seguinte forma:
+
+public void onResponse(Call<Produto> call,
+                                    Response<Produto> response) {
+    Produto produtoSalvo = response.body();
+    salvaInterno(produtoSalvo, listener);
+}COPIAR CÓDIGO
+Também faremos uma extração no comportamento em que acessamos uma Call e fazemos uma enqueue(), em salva() do mesmo arquivo:
+
+Call<Produto> call = service.salva(produto);
+call.enqueue(new Callback<Produto>() {
+    @Override
+    public void onResponse(Call<Produto> call,
+                                        Response<Produto> response) {
+        Produto produtoSalvo = response.body();
+        salvaInterno(produtoSalvo, listener);
+    }
+
+    @Override
+    public void onFailure(Call<Produto> call,
+                                        Throwable t) {
+    }
+});COPIAR CÓDIGO
+Estamos fazendo tudo isso para salvarmos na API. Desta vez, extrairemos para um método chamado salvaNaApi. Essa parte de refatoração é bem simples — ao pedirmos para o ProdutoRepository salvar na API, durante este processo ele chama o enqueue(), que fará a implementação de Callback em onResponse(), e então salvamos internamente e notificamos a Activity.
+
+Sobre a parte de Callback, é importante reforçar que quando fazemos este tipo de implementação, há duas situações: quando temos uma resposta e uma falha, e a princípio estamos assumindo que todas as vezes em que temos uma resposta, tudo está funcionando corretamente, sendo que isso pode não ser verdade.
+
+Todas as vezes em que nos comunicamos com um meio externo, existirão pontos de falha. E quando pegamos uma resposta, o primeiro passo implica em nos certificarmos de que ela está funcionando bem, da maneira esperada. Para isso, utilizaremos nosso parâmetro de resposta, dentro do qual incluiremos um método para verificarmos se ele foi bem sucedido, isSuccessful().
+
+E então, conseguimos tentar fazer a operação que queremos, que é pegar e salvar internamente o conteúdo do body().
+
+public void onResponse(Call<Produto> call,
+                                    Response<Produto> response) {
+    if(response.isSuccessful()) {
+        Produto produtoSalvo = response.body();
+        salvaInterno(produtoSalvo, listener);
+    }
+
+}COPIAR CÓDIGO
+Porém, por mais que tenhamos certeza do sucesso do resultado, perceberemos que, durante a comunicação de outras APIs, o sucesso não trará o que for desejado. Talvez esta resposta traga outro valor, diferente de Produto, ou seja, é necessário verificarmos o conteúdo que pegamos no body() também, antes mesmo de trabalharmos nele.
+
+Caso contrário, pode acontecer de trabalharmos com uma referência nula, mesmo tendo tido sucesso na resposta. Sendo assim, acrescentaremos outro if() para verificar se ele é diferente de nulo, pois, caso seja, aí sim poderemos salvar, já que para este caso específico com que estamos trabalhando na API, temos certeza de que funciona da maneira desejada.
+
+public void onResponse(Call<Produto> call,
+                                    Response<Produto> response) {
+    if(response.isSuccessful()) {
+        Produto produtoSalvo = response.body();
+        if(produtoSalvo != null){
+            salvaInterno(produtoSalvo, listener);
+        }
+    }
+
+}COPIAR CÓDIGO
+Em muitos casos, esta abordagem fará com que evitemos erros comuns no dia a dia. Continuando, nosso inspetor de código destaca os parâmetros do trecho acima, indicando que eles não estão anotados com @EverythingIsNonNull, isso porque são parâmetros cuja implementação do Retrofit garante que sempre virá uma instância.
+
+Por este motivo, não precisaremos verificar se response é uma referência nula, por exemplo. Assim, temos uma verificação a menos, e chamar o isSuccessful() diretamente já é o suficiente. Entretanto, para desativarmos o alarme do Android Studio, temos duas opções:
+
+colocar a anotação @NonNull antes de Call<Produto>;
+dentro dos métodos, no caso, onResponse() ou onFailure(), ou seja, logo após @Override de cada um deles, incluir @EverythingIsNonNull.
+Indicando que nenhum dos parâmetros terá referência nula. Neste caso, escolheremos a segunda opção. Por fim, também precisaremos verificar as situações em que há falhas, já que salvamos internamente a resposta de sucesso com um produto que não é nulo, mas não definimos o que acontece quando isso não funciona.
+
+Nosso usuário não tem nenhum tipo de feedback ou notificação para entender o que acontece. Portanto, incluiremos um else para termos a responsabilidade de notificarmos uma falha, caso haja.
+
+public void onResponse(Call<Produto> call,
+                                    Response<Produto> response) {
+    if(response.isSuccessful()) {
+        Produto produtoSalvo = response.body();
+        if(produtoSalvo != null){
+            salvaInterno(produtoSalvo, listener);
+        }
+    } else {
+        // notificar falha
+    }
+}COPIAR CÓDIGO
+Isto também ocorrerá em onFailure():
+
+@Override
+@EverythingIsNonNull
+public void onFailure(Call<Produto> call,
+                                    Throwable t) {
+    // notificar falha
+}COPIAR CÓDIGO
+Precisamos entender como faremos esta notificação; a princípio estamos trabalhando com um Listener com uma única responsabilidade, que é notificar a nossa Activity quando os dados são carregados. Então, implementaremos um Callback próprio, capaz de notificar quando há resultado e falha.
+
+No fim do código, após a implementação de DadosCarregadosListener, implementaremos uma nova interface com o comportamento do Callback:
+
+public interface DadosCarregadosCallback <T> {
+    void quandoSucesso(T resultado);
+    void quandoFalha(String erro);
+}COPIAR CÓDIGO
+Ele receberá um resultado genérico com base na implementação, e indicará quando houver falha a partir do método quandoFalha(). Enviaremos uma mensagem em string, indicando o erro, assim, a Activity poderá explorá-la, mostrá-la ao usuário, ou o que for. Ela será notificada e tomará uma ação.
+
+Feito isso, basta substituirmos nosso Listener, DadosCarregadosListener, por DadosCarregadosCallback, alterando também a chamada listener por callback:
+
+public void salva(Produto produto,
+                        DadosCarregadosCallback<Produto> callback) {
+    salvaNaApi(produto, callback);
+}COPIAR CÓDIGO
+Faremos o mesmo em salvaNaApi() e em salvaInterno(). Neste, trocaremos quandoCarregados() por quandoSucesso() para indicarmos o produto que está sendo enviado. E então faremos as notificações: em onResponse(), trocaremos a linha // notificar falha dentro de else por callback.quandoFalha(erro: "Resposta mal sucedida").
+
+Da mesma forma, em onFailure(), a linha que contém // notificar falha ficará com outra mensagem genérica, callback.quandoFalha(erro: "Falha de comunicação: " + t.getMessage()), em que deixaremos a mensagem do Throwable concatenada com a string.
+
+Em seguida, iremos a ListaProdutosActivity.java para modificarmos o conceito de Listener, que está desatualizado. Faremos a implementação da interface ProdutoRepository.DadosCarregadosCallback. E em quandoSucesso() e quandoFalha() teremos:
+
+@Override
+public void quandoSucesso(Produto produtoSalvo) {
+    adapter.adiciona(produtoSalvo);
+}
+
+@Override
+public void quandoFalha(String erro) {
+    Toast.makeText(context: ListaProdutosActivity.this,
+            text: "Não foi possível salvar o produto",
+            Toast.LENGTH_SHORT).show();
+}COPIAR CÓDIGO
+Feitas estas modificações, o próximo passo consiste em executarmos a aplicação para testar seu funcionamento. Adicionaremos novos produtos, como um celular de 1200 reais, e quantidade de 20. Sem internet, é exibida a mensagem de erro, portanto conseguimos notificar o usuário como gostaríamos.
+
+Esta abordagem é muito flexível, pois permite que façamos toda a estratégia de salvarmos na API antes de salvarmos internamente, como também de notificação dos problemas, comuns em qualquer tipo de implementação que envolva o Callback ou meios externos, qualquer situação na qual temos risco de falhas. É importante estarmos preparados para lidarmos com isso.
+
+@@06
+Refatorando o código do callback
+
+Refatore o código de callback do comportamento de salvar o produto.
+Além de técnicas como extração, também aplique os cuidados recomendados para esse tipo de implementação, como a verificação de sucesso da resposta.
+
+Após finalizar, teste o App e veja se tudo funciona como antes e se os novos comportamentos são apresentados como esperado.
+
+O produto deve ser salvo apenas quando tiver acesso à API, quando não tiver acesso deve apresentar uma mensagem de feedback para o usuário. Você pode conferir o código da atividade a partir do commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/14ff1f1f96bc65db5699094fb8e7e21f2803d20e
+
+@@07
+Para saber mais - Mais cuidados com a resposta do Retrofit
+
+Além de verificar se a resposta foi sucedida, existem outros detalhes que podemos nos atentar ao utilizar o Retrofit.
+Neste artigo (em Inglês), são apresentadas técnicas avançadas de tratamento de erro de rede utilizando o Retrofit.
+
+https://medium.com/@tsaha.cse/advanced-retrofit2-part-1-network-error-handling-response-caching-77483cf68620
+
+@@08
+O que aprendemos?
+
+Nesta aula, aprendemos a:
+Implementar requisições utilizando a execução assíncrona da Call;
+Peculiaridades da execução do Callback;
+Flexibilizar possibilidades do Callback para a Activity.
