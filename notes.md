@@ -3,7 +3,7 @@
 Curso de Android: acessando uma API Web
 
 ```
-java -jar server.jar.
+java -jar server.jar
 
 lsof -i:8080
 Kill -9
@@ -1330,3 +1330,369 @@ Nesta aula, aprendemos a:
 Implementar requisições utilizando a execução assíncrona da Call;
 Peculiaridades da execução do Callback;
 Flexibilizar possibilidades do Callback para a Activity.
+
+#### 29/09/2023
+
+@05-Integrando comportamento de edição
+
+@@01
+Utilizando Callback na busca de produtos
+
+Vamos modificar agora o comportamento de busca de produtos para que ele utilize o conceito de Callback. Para isso removeremos a seguinte interface, pois trabalharemos apenas com o Callback:
+public interface DadosCarregadosListener <T> {
+    void quandoCarregados(T resultado);
+}COPIAR CÓDIGO
+Isso fará com que alguns pontos deixem de compilar, portanto substituiremos DadosCarregadosListener por DadosCarregadosCallback em buscaProdutos(), alterando a referência listener para callback. Faremos o mesmo nos demais locais usando um atalho do próprio Android Studio.
+
+Em buscaProdutosInternos(), precisaremos altrerar listener para callback e fazer uma modificação de chamada na busca interna, de quandoCarregados() para quandoSucesso(). Modificaremos também a busca na API, alterando o primeiro parâmetro para callback, trocando listener por callback em buscaProdutosNaApi().
+
+Teremos que fazer algumas modificações a mais, porque além de notificar quando há bom funcionamento, precisaremos notificar quando há falhas, e para facilitar tudo isso, podemos utilizar o enqueue(),já que esta execução que estamos fazendo via Async Task é justamente para obtermos o comportamento padrão do enqueue(), que é fazer uma execução e uma Thread separada.
+
+Assim sendo, manteremos o BaseAsyncTask como está, e faremos uma implementação de um callback acima para obtermos o resultado esperado. E então removeremos a linha List<Produto> produtosNovos = resposta.body() e a colaremos dentro do if() de onResponse(), trocando resposta por response.
+
+Acrescentaremos outro if() para verificar se os produtos novos são de referência não nula, isto é, válida. Para isso, copiaremos dao.salva(produtosNovos). Após salvarmos o produto, retornamos buscaTodos() e então notificamos que ele poderá ser carregado.
+
+Quando estávamos usando o Async Task, retornávamos o conteúdo dao.buscaTodos() para que ele ficasse disponível no Listener que faz a notificação (listener::quandoCarregados). Sendo assim, pegaremos o nosso callback, chamaremos quandoSucesso(), dentro do qual buscaremos todos os produtos.
+
+call.enqueue(new Callback<List<Produto>>() {
+    @Override
+    @EverythingIsNonNull
+    public void onResponse(Call<List<Produto>> call,
+                                Response<List<Produto>> response) {
+        if(response.isSuccessful()){
+            List<Produto> produtosNovos = response.body();
+            if(produtosNovos != null) {
+                dao.salva(produtosNovos);
+                callback.quandoSucesso(dao.buscaTodos());
+            }
+        }
+    }
+
+    @Override
+    @EverythingIsNonNull
+    public void onFailure(Call<List<Produto>> call,
+                                Throwable t) {
+
+    }
+});COPIAR CÓDIGO
+É o mesmo comportamento feito na Async Task, de forma mais resumida, podemos inclusive deletar todo o trecho abaixo:
+
+new BaseAsyncTask<>(() -> {
+    try {
+        Response<List<Produto>> resposta = call.execute();
+        List<Produto> produtosNovos = resposta.body();
+        dao.salva(produtosNovos);
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    return dao.buscaTodos();
+}, listener::quandoCarregados)
+        .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);COPIAR CÓDIGO
+Agora, precisamos incluir os pontos de falha, conforme a proposta do nosso Callback. A resposta será bastante genérica, e quem for modificar alguma resposta para o nosso usuário, em específico, será justamente a nossa Activity, que trabalhará com a parte visual.
+
+call.enqueue(new Callback<List<Produto>>() {
+    @Override
+    @EverythingIsNonNull
+    public void onResponse(Call<List<Produto>> call,
+                                Response<List<Produto>> response) {
+        if(response.isSuccessful()){
+            List<Produto> produtosNovos = response.body();
+            if(produtosNovos != null) {
+                dao.salva(produtosNovos);
+                callback.quandoSucesso(dao.buscaTodos());
+            }
+        } else {
+            callback.quandoFalha(erro: "Resposta mal sucedida");
+        }
+    }
+
+    @Override
+    @EverythingIsNonNull
+    public void onFailure(Call<List<Produto>> call,
+                                Throwable t) {
+        callback.quandoFalha(erro: "Falha de comunicação: " + t.getMessage());
+    }
+});COPIAR CÓDIGO
+O que muda é que, na Activity, passaremos a fazer uma implementação da nova interface de Callback no lugar de adapter::atualiza no trecho abaixo, que terá quandoSucesso() e quandoFalha() também. Em seguida, testaremos nosso aplicativo no emulador, no caso de não termos acesso à internet, pois não modificamos nada quando há sucesso, e sim quando há falha.
+
+Apesar de comentado anteriormente que não precisamos mais das Async Tasks, isto não é verdade, pois executamos o onResponse() na Main Thread, e portanto precisamos fazer com que estas operações do nosso banco de dados sejam feitas em uma Async Task.
+
+public void onResponse(Call<List<Produto>> call,
+                            Response<List<Produto>> response) {
+    if(response.isSuccessful()){
+        List<Produto> produtosNovos = response.body();
+        if(produtosNovos != null) {
+            new BaseAsyncTask<>(() -> {
+                dao.salva(produtosNovos);
+                return dao.buscaTodos();
+            }, callback::quandoSucesso)
+                    .execute();
+        }
+    } else {
+        callback.quandoFalha(erro: "Resposta mal sucedida");
+    }
+}COPIAR CÓDIGO
+Em seguida, poderemos extrair o seguinte trecho:
+
+new BaseAsyncTask<>(() -> {
+    dao.salva(produtosNovos);
+    return dao.buscaTodos();
+}, callback::quandoSucesso)
+        .execute();COPIAR CÓDIGO
+Para indicar que estamos atualizando os produtos. O nome do método será atualizaInterno, com base nos produtos novos, cujo nome poderá ser simplesmente produtos:
+
+if(produtosNovos != null) {
+    atualizaInterno(produtosNovos, callback);
+}COPIAR CÓDIGO
+Agora, sim, faremos a execução esperada — atualizar internamente, salvando os produtos, retornando-os e notificando o usuário com base no Callback. Então, é muito importante que todas as vezes em que executamos algo em onResponse() ou onFailure(), a execução acontece na UI Thread. Assim, levando em consideração o que vimos sobre paralelismo, é melhor evitar execuções que podem quebrar, ou travar.
+
+Testaremos no emulador rotacionando a tela no modo avião, e obteremos a mensagem de erro esperada, removeremos um dos produtos, que existe tanto interna quanto externamente, e eles não serão carregados corretamente, porém a notificação do erro surge conforme desejado. Com a internet, a rotação da tela já funciona sem nenhum problema.
+
+Por mais que tenhamos feito esta adaptação, criamos nosso Callback em buscaProdutosNaApi() de forma bastante similar ao de salvaNaApi(). Então, antes mesmo de fazermos as próximas implementações relacionadas à edição e remoção de produtos, tornaremos estas implementações de Callback genéricas o suficiente, para que possam ser reutilizadas.
+
+@@02
+Utilizando o enqueue na busca de produtos
+
+Caso você precise do projeto com todas as alterações realizadas na aula passada, você pode baixá-lo neste link.
+Converta o comportamento de busca de produtos para que utilize o Callback do Retrofit.
+
+Nesta conversão, lembre-se de exigir o Callback para que seja possível notificar o usuário sobre possíveis falhas.
+
+Após migração teste o App e veja se funciona como esperado. Lembre-se de simular a situação que não tem internet para conferir o feedback que o usuário vai receber.
+
+https://github.com/alura-cursos/android-persistencia-web/archive/aula-4.zip
+
+O comportamento de busca deve funcionar como antes, a diferença é que ao perder conexão com a internet deve apresentar a mensagem de falha de busca. O código da atividade pode ser conferido a partir deste commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/e6c149bf4a1d2299bda7a5478c7d03e6b428315b
+
+@@03
+Implementando Callback genérico
+
+Como vimos, temos implementações de Callbacks que são bem similares entre si. De que maneira podemos trabalhar com uma única implementação, a ser reutilizada?
+Assim como fizemos em BaseAsyncTask(), criaremos uma referência genérica o suficiente para que seja reutilizada em qualquer situação, evitando repetições desnecessárias de código. Para isto, em "app > java > br.com.alura.estoque > retrofit" criaremos o pacote "callback", em que serão implementados outros, caso necessário.
+
+Nele, criaremos a interface BaseCallback, que precisará receber um tipo genérico, e implementará a Callback do Retrofit, além dos métodos onResponse() e onFailure(). Incluiremos as mesmas chamadas de ProdutoRepository.java, comuns à qualquer uma das implementações, no caso, verificar a resposta bem sucedida, se o conteúdo é diferente de nulo, para então passar à ação desejada.
+
+public class BaseCallback <T> implements Callback<T> {
+    @Override
+    @EverythingIsNonNull
+    public void onResponse(Call<T> call, Response<T> response) {
+        if(response.isSuccessful()) {
+            T resultado = response.body();
+            if(resultado != null){
+                // notifica que tem resposta com sucesso
+            }
+        } else {
+            // notifica falha
+        }
+    }
+
+    @Override
+    @EverythingIsNonNull
+    public void onFailure(Call<T> call, Throwable t) {
+        // notifica falha
+    }
+}COPIAR CÓDIGO
+Feito isso, precisaremos incluir um Callback específico para notificar e fazer uso desta implementação genérica, logo após o código referente onFailure():
+
+public interface RespostaCallback <T> {
+    void quandoSucesso(T resultado);
+    void quandoFalha(String erro);
+}COPIAR CÓDIGO
+E então poderemos utilizar a mesma técnica de BaseAsyncTask.java para que isto seja um atributo de classe que exija tal implementação. Na interface que acabamos de implementar, logo antes de @Override, digitaremos:
+
+private final RespostaCallback<T> callback;
+
+public BaseCallback(RespostaCallback<T> callback) {
+    this.callback = callback;
+}COPIAR CÓDIGO
+Agora que temos acesso ao nosso callback via construtor, incluiremos as notificações conforme esperado:
+
+public class BaseCallback <T> implements Callback<T> {
+    @Override
+    @EverythingIsNonNull
+    public void onResponse(Call<T> call, Response<T> response) {
+        if(response.isSuccessful()) {
+            T resultado = response.body();
+            if(resultado != null){
+                callback.quandoSucesso(resultado);
+            }
+        } else {
+            callback.quandoFalha(erro: "Resposta mal sucedida");
+        }
+    }
+
+    @Override
+    @EverythingIsNonNull
+    public void onFailure(Call<T> call, Throwable t) {
+        callback.quandoFalha(erro: "Falha de comunicação: " + t.getMessage());
+    }
+}COPIAR CÓDIGO
+Vamos fazer a reutilização do código?
+
+Voltaremos a ProdutoRepository.java e começaremos pelo comportamento de salvar, que é onde fizemos as primeiras modificações. Faremos uma instância de BaseCallback, e então precisaremos implementar apenas a interface com quandoSucesso() e quandoFalha(). Assim, não precisaremos mais identificar pontos de falha ou sucesso, mensagens e afins.
+
+Como a parte de falha será feita automaticamente, incluiremos apenas o que fazíamos quando obtínhamos a resposta, que é chamar o método internamente, com salvaInterno(produtoSalvo, callback). E em quandoFalha() pegamos nosso callback e o erro.
+
+@Override
+public void quandoSucesso(Produto produtoSalvo) {
+    salvaInterno(produtoSalvo, callback);
+}
+
+@Override
+public void quandoFalha(String erro) {
+    callback.quandoFalha(erro);
+}COPIAR CÓDIGO
+Isso fará com que o repositório tenha que lidar com as operações de maneira mais simples. Vamos testar a aplicação e, se tudo estiver funcionando de acordo, passamos ao comportamento de buscar produtos (buscaProdutosNaApi), em que aplicaremos o mesmo procedimento.
+
+@Override
+public void quandoSucesso(List<Produto> predutosNovos) {
+    atualizaInterno(produtosNovos, callback);
+}
+
+@Override
+public void quandoFalha(String erro) {
+    callback.quandoFalha(erro);
+}COPIAR CÓDIGO
+Feita esta alteração, testaremos a aplicação mais uma vez, que não apresenta nenhum problema. A nossa implementação está bem mais sucinta. Prosseguiremos às próximas implementações em relação à edição e remoção de produtos mais adiante.
+
+@@04
+Criando o callback genérico
+
+Implemente o Callback genérico com os comportamentos comuns entre os comportamentos de busca e inserção de produtos.
+Após implementar, utilize o Callback genérico nas chamadas de enqueue() de ambos os comportamentos, teste o App e veja se funciona como esperado.
+
+O App deve apresentar os mesmos comportamentos, a diferença é que agora o código fica mais enxuto. O código desta atividade pode ser conferido neste commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/7b51b26a2cacc49560fff04d26d778ee44169d74
+
+@@05
+Integrando edição com a API
+
+Para integrar os comportamentos de edição com a nossa API, utilizaremos a mesma abordagem feita na busca e inserção de produtos. Sendo assim, migraremos o comportamento de edita() para o nosso repositório, ProdutoRepository.java, antes do trecho referente a DadosCarregadosCallback e vamos adaptando conforme a necessidade, como tornando-o público.
+Também receberemos o nosso Callback como parâmetro e, em vez do Adapter, notificarmos a Activity, e para isto podemos utilizar um Method reference:
+
+public void edita(Produto produto,
+                    DadosCarregadosCallback<Produto> callback) {
+    new BaseAsyncTask<>(() -> {
+        dao.atualiza(produto);
+        return produto;
+    }, callback::quandoSucesso)
+            .execute();
+}COPIAR CÓDIGO
+Deste modo, identificamos que posicao deixa de ser necessária, portanto a removeremos. Em ListaProdutosActivity.java utilizaremos o repository para chamar edita(), não enviaremos a posicao, implementaremos a interface ProdutoRepository.DadosCarregadosCallback, indicaremos que editaremos nosso Adapter quando recebermos o produto.
+
+Em seguida, quando houver falha, notificaremos o usuário de que não foi possível fazer a edição. Fiquemos atentos aos nomes resultado em quandoSucesso(), quando na verdade estamos trabalhando com um produto editado, e em produtoEditado teremos um produto criado, não editado. E resultado será produtoEditado.
+
+private void abreFormularioEditaProduto(int posicao, Produto produto) {
+    new EditaProdutoDialog(context: this, produto,
+            produtoCriado -> repository.edita(produtoCriado,
+                    new ProdutoRepository.DadosCarregadosCallback<Produto>() {
+                @Override
+                public void quandoSucesso(Produto resultado) {
+                    adapter.edita(posicao, produtoEditado);
+                }
+
+                @Override
+                public void quandoFalha(String erro) {
+                    Toast.makeTest(context: ListaProdutosActivity.this,
+                            text: "Não foi possível editar o produto",
+                            Toast.LENGTH_SHORT).show();
+                }
+            }));
+}COPIAR CÓDIGO
+O próximo passo consiste em criar a requisição em edita(), com service.edita() e todos os argumentos necessários. Entretanto, antes disso, é muito importante garantirmos que a edição interna ainda esteja funcionando, pois se começarmos a fazer a implementação, de repente podemos descobrir um problema interno e isso o tornará sua resolução mais difícil.
+
+Vamos, então, testar a aplicação e verificar seu funcionamento interno. Editaremos o primeiro produto, que ainda não foi enviado à nossa API, e confirmaremos que tudo acontece conforme esperado. Lembrando que tudo que for feito e salvo internamente só será efetivado após a sua integração com a API.
+
+Como vimos no Postman, será necessário um ID, pois o envio terá que ser feito via endereço, e isso pode variar conforme o produto, e em seguida enviaremos o produto a ser editado. Uma técnica que agiliza a implementação é incluir Call<Produto> call = antes de service.edita(), para a inicialização. Assim, o método é criado automaticamente com a Call como resposta.
+
+public void edita(Produto produto,
+                    DadosCarregadosCallback<Produto> callback) {
+
+    Call<Produto> call = service.edita(produto.getId(), produto);
+
+    new BaseAsyncTask<>(() -> {
+        dao.atualiza(produto);
+        return produto;
+    }, callback::quandoSucesso)
+            .execute();
+}COPIAR CÓDIGO
+Para a requisição, em ProdutoService.java, incluímos o verbo PUT, teremos uma anotação, e deixamos o endereço produto/ vinculando o ID correspondente a cada produto, com o uso das chaves e um nome de identificador que acharmos melhor. E em nossos parâmetros anotaremos o valor que queremos que entre no endereço, com @Path, o qual exige um identificador contido na URL.
+
+public interface ProdutoService {
+
+    @GET("produto")
+    Call<List<Produto>> buscaTodos();
+
+    @POST("produto")
+    Call<Produto> salva(@Body Produto produto);
+
+    @PUT("produto/{id}")
+    Call<Produto> edita(@Path("id") long id,
+                            @Body Produto produto);
+}COPIAR CÓDIGO
+Em que {id} será computado, inicializado, com o valor de ID colocado no @Path, que neste caso é do long. Criada a requisição, basta implementarmos a call em edita(), no enqueue(), que não nos traz nenhuma novidade: verificaremos a resposta, teremos quandoSucesso() e quandoFalha(), e assim por diante.
+
+No caso, antes mesmo da notificação de sucesso, sabemos que precisamos salvar o produto internamente, e para isso recortaremos o trecho de BaseAsyncTask localizado abaixo do enqueue() e o colaremos dentro de quandoSucesso(). E em quandoFalha(), precisamos apenas incluir a notificação do Callback.
+
+@Override
+public void quandoSucesso(Produto resultado) {
+    new BaseAsyncTask<>(() -> {
+        dao.atualiza(produto);
+        return produto;
+    }, callback::quandoSucesso)
+            .execute();
+}
+
+@Override
+public void quandoFalha(String erro) {
+    callback.quandoFalha(erro);
+}COPIAR CÓDIGO
+Antes mesmo de testarmos, podemos refatorar para ganhar tempo, deixando o código da seguinte forma:
+
+@Override
+public void quandoSucesso(Produto resultado) {
+    editaInterno(produto, callback);
+}COPIAR CÓDIGO
+Do mesmo modo, extrairemos a nossa Call para o método editaNaApi. Assim, em edita() solicitamos que a edição seja feita na API, em editaNaApi() fazemos o enqueue() com base na requisição de edição, e quando houver sucesso editamos internamente. E em editaInterno() a notificação é realizada.
+
+Testaremos a aplicação no emulador para verificar se ela funciona conforme esperado, no caso, se ela exibe a mensagem de erro quando tentamos fazer a edição em modo avião. Em seguida, habilitaremos a internet, rotacionaremos a tela e faremos a mesma edição. Obteremos uma mensagem de erro, portanto consultaremos o Logcat para entender o que houve.
+
+Teremos que a requisição foi realizada, porém ainda não temos o produto específico em nossa API, que somente conseguirá editar algo que efetivamente exista. Então, como a API foi implementada, não teremos capacidade de editar este produto. A abordagem que fica como sugestão, neste caso, será remover este produto salvo internamente, e editar outro produto.
+
+Então, não conseguimos editar um dos produtos por conta de uma peculiaridade da API, uma vez que tínhamos os valores correspondentes a ele apenas internamente. Estamos usando o ID como base, um dos problemas do universo das comunicações externas, e é por isto que não conseguimos fazer esta edição.
+
+Não se trata de um problema no aplicativo, ou algo do tipo, e sim de como a API foi implementada. Ela poderia criar um produto com ID 1, no caso, em sua estratégia, ela não cria outro produto com base no ID recebido, e sim naqueles que ela controla. Se existem 10 produtos criados, ela irá lidar com produtos a partir do ID 11.
+
+A seguir veremos a parte de remoção dos produtos!
+
+@@06
+Editando produto internamente e na API
+
+Integre o comportamento de edição com a API. Para isso, primeiro migre a edição interna para o repositório, em seguida, implemente a requisição para edição e a execute.
+Mantenha a mesma estratégia da inserção, primeiro edita na API e se tudo der certo, internamente. Reutilize as mesmas técnicas, principalmente o Callback genérico.
+
+Ao finalizar a implementação, teste o App e veja se funciona conforme estratégia esperada.
+
+O App deve editar o produto apenas quando tiver comunicação sucedida com a API. O código desta atividade pode ser conferido neste commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/24f04247228b939e57d0565507f83a0854f21ce5
+
+@@07
+Para saber mais - Variações nas requisições
+
+Durante o curso, criamos requisições explorando o conteúdo do corpo (body) e caminho (path) da URL.
+Mas é possível ir mais além, definindo headers e query parameters, entre outras possibilidades.
+
+Caso tenha necessidade de abordagens diferentes, consulte a documentação e veja os exemplos.
+
+https://square.github.io/retrofit/
+
+@@08
+O que aprendemos?
+
+Nesta aula, aprendemos a:
+Criar Callbacks genéricos;
+Implementar requisições que recebem valores variáveis via URL.
