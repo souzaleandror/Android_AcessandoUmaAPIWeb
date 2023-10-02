@@ -1696,3 +1696,308 @@ O que aprendemos?
 Nesta aula, aprendemos a:
 Criar Callbacks genéricos;
 Implementar requisições que recebem valores variáveis via URL.
+
+#### 01/10/2023
+
+@06-Integrando comportamento de remoção
+
+@@01
+Migrando comportamento de remoção
+
+Para migrar o comportamento de remoção de produtos integrando-o com a nossa API, faremos o mesmo procedimento da edição — recortaremos o trecho referente a remove() de ListaProdutosActivity.java, e o colaremos em nosso repositório, ProdutoRepository.java, pois ele irá manter este comportamento.
+Em seguida, aplicaremos os mesmos ajustes feitos anteriormente, deixando este método público, e verificando os parâmetros e as chamadas internas para entendermos o que deve ser mantido. A posicao, por exemplo, é utilizada somente para atualizar o adapter, e remover o produto, e não é necessário, uma vez que a remoção será feita pela Activity.
+
+Da mesma maneira que na edição, produtoRemovido será substituído por produto, e na parte em que fazemos a notificação, precisamos ajustar para que ela seja feita via Callback, e não pelo Adapter. Em se tratando de seu tipo de retorno, como vimos no Postman durante os testes de API, não retornamos nada quando removemos algo da API. Portanto não podemos devolver um produto ou uma lista deles.
+
+Em situações em que fizermos requisições sem retorno no body(), podemos usar como referência o Void, como fazemos na Async Task. Dado que enviamos uma referência nula, e que já indicamos que teremos um Void, para a notificação, utilizaremos o Method reference.
+
+public void remove(Produto produto,
+                    DadosCarregadosCallback<Void> callback) {
+    new BaseAsyncTask<>(() -> {
+        dao.remove(produto);
+        return null;
+    }, callback::quandoSucesso)
+            .execute();
+}COPIAR CÓDIGO
+Continuando, em ListaProdutosActivity.java precisaremos adaptar nosso código para que, no momento em que um produto é removido, se faça a implementação adequada com o nosso repositório, no Listener do adapter do Recycler View. Daí, se verifica se o menu de contexto que possui o item de remoção foi acionado.
+
+Ele nos obriga a fazermos a implementação de uma interface que tem justamente o objetivo de enviar a posição e o produto escolhido para remoção. Assim, podemos utilizar a expressão lambda, e apesar de estar produtoRemovido, estaremos lidando com um produto escolhido, que ainda não foi removido, portanto iremos renomeá-lo.
+
+listaProdutos.setAdapter(adapter);
+adapter.setOnItemClickRemoveContextMenuListener(
+        (posicao, produtoEscolhido) -> );COPIAR CÓDIGO
+Esta alteração de produtoRemovido para produtoEscolhido pode ser feita na fonte do código, caso se prefira, o que não será feito neste momento por seguirmos o fluxo do projeto.
+Precisaremos trabalhar em cima de nosso repositório, e implementar o Callback:
+
+listaProdutos.setAdapter(adapter);
+adapter.setOnItemClickRemoveContextMenuListener(
+        (posicao, produtoEscolhido) -> {
+                repository.remove(produtoEscolhido,
+                        new ProdutoRepository.DadosCarregadosCallback<Void>() {
+                            @Override
+                            public void quandoSucesso(Void resultado) {
+                                adapter.remove(posicao);
+                            }
+
+                            @Override
+                            public void quandoFalha(String erro) {
+                                Toast.makeText(context: ListaProdutosActivity.this,
+                                        text: "Não foi possível remover o produto",
+                                        Toast.LENGTH_SHORT).show();
+                            }
+                        });
+});COPIAR CÓDIGO
+Feita esta primeira migração, testaremos a remoção interna de um produto, após o qual faremos a integração com a API. Assim, ao removermos um produto e em seguida rotacionarmos a tela, teremos que a remoção não foi realizada, conforme esperado. Da mesma forma como na edição, criaremos a requisição para a remoção em ProdutoRepository.java.
+
+Para a requisição precisamos acessar o ID do produto, mas neste caso não basta pedirmos apenas o ID para realizarmos a remoção, pois ainda precisamos do nosso produto internamente, a não ser que fizéssemos uma modificação em nosso DAO de forma a criarmos uma query que só removesse com ID. E para facilitar nosso trabalho, faremos a inicialização de Call para que se crie um método com seu retorno.
+
+O método será criado, e então podemos adicionar @Path, como fizemos na edição, juntamente à requisição de remoção, @DELETE:
+
+@DELETE("produto/{id}")
+Call<Void> remove(@Path("id") long id);COPIAR CÓDIGO
+Implementaremos também o BaseCallback, a partir do qual, quando bem sucedido, teremos o comportamento de BaseAsyncTask, que extrairemos para removeInterno. Por fim, a chamada da Call será extraída para removeNaApi.
+
+public void remove(Produto produto,
+                    DadosCarregadosCallback<Void> callback) {
+
+    removenaApi(produto, callback);
+}COPIAR CÓDIGO
+Sabemos que só conseguiremos remover um produto quando isto ocorrer na API, e quando obtivermos uma resposta de sucesso, removemos internamente. Ao testarmos a aplicação e consultarmos o Logcat, teremos que o Retrofit faz a requisição, mas o produto em questão não é removido no emulador. Precisamos entender o porquê disso.
+
+@@02
+Adicionando a remoção no repositório
+
+Caso você precise do projeto com todas as alterações realizadas na aula passada, você pode baixá-lo neste link.
+Migre o comportamento de remoção para o repositório. Em seguida, implemente a requisição e faça a mesma estratégia feita para a edição.
+
+Teste o App e veja se a remoção acontece na API.
+
+A remoção interna com essa integração será resolvida a seguir.
+
+https://github.com/alura-cursos/android-persistencia-web/archive/aula-5.zip
+
+A remoção na API deve funcionar, mas ainda será apresentado o produto na lista de produtos. O código desta atividade pode ser conferido a partir deste commit.
+
+@@03
+Criando Callback sem retorno
+
+Para entendermos o motivo do problema, precisamos verificar a implementação que fizemos para o Callback que estamos reutilizando para cada uma das chamadas com enqueue(). Se acessarmos a implementação via "Ctrl + B", percebemos que em onResponse() consideramos que, ao sucesso da resposta, e ao conseguirmos o conteúdo, uma referência que não seja nula, aí sim chamamos quandoSucesso().
+Este é realmente um ponto de falha — estas requisições em que não existe nenhum tipo de retorno no conteúdo do body(). O @DELETE não devolve nenhum tipo de objeto que podemos consumir, e é por isso que temos uma referência nula e não recebemos a notificação de sucesso. Então, o que podemos fazer para flexibilizar esta solução?
+
+Além desta abordagem que estamos utilizando atualmente, podemos implementar outra, a ser reutilizada quando não tivermos resultado. Para tal, criaremos outro Callback específico, no pacote correspondente, com a única diferença de que trabalharemos apenas em cima da resposta de sucesso que teremos.
+
+A nova classe será chamada de CallbackSemRetorno, e lidaremos com um Callback de tipo Void. A implementação nos será familiar:
+
+public class CallbackSemRetorno implements Callback<Void> {
+    @Override
+    @EverythingIsNonNull
+    public void onResponse(Call<Void> call,
+                                    Response<Void> response) {
+        if(response.isSuccessful()) {
+            callback.quandoSucesso();
+        } else {
+            callback.quandoFalha("Resposta mal sucedida");
+        }
+    }
+
+    @Override
+    @EverythingIsNonNull
+    public void onFailure(Call<Void> call,
+                                    Throwable t) {
+        callback.quandoFalha("Falha de comunicação: " + t.getMessage());
+    }
+}COPIAR CÓDIGO
+Desta vez, ficaremos muito mais fixos ao Void, isto é, não daremos oportunidade para a inclusão do tipo de retorno. E implementaremos algo bastante similar ao que fizemos em RepostaCallback de BaseCallback.java:
+
+public interface RespostaCallback {
+    void quandoSucesso();
+    void quandoFalha(String erro);
+}COPIAR CÓDIGO
+A interface que utilizaremos não será genérica, e sim restrita ao tipo que queremos. Assim, logo no início da implementação da classe CallbackSemRetorno, acrescentaremos:
+
+private final RespostaCallback callback;
+
+public CallbackSemRetorno(RespostaCallback callback) {
+    this.callback = callback;
+}COPIAR CÓDIGO
+Agora, sim, podemos fazer a implementação do novo Callback em removeNaApi() de ProdutoRepository.java, em que, no lugar de BaseCallback utilizaremos CallbackSemRetorno. Além disso, removeremos o tipo genérico de RespostaCallback, e modificaremos as assinaturas. Em quandoSucesso(), não receberemos mais nada, portanto nada será mantido entre parênteses.
+
+Na parte de quandoFalha(), tudo se mantêm como estava antes, inclusive incluiremos a notificação de falha, que não havíamos implementado anteriormente:
+
+@Override
+public void quandoSucesso() {
+    removeInterno(produto, callback);
+}
+
+@Override
+public void quandoFalha(String erro) {
+    callback.quandoFalha(erro);
+}COPIAR CÓDIGO
+Para tornar mais explícito o que o BaseCallback faz, podemos alterá-lo para CallbackComRetorno. Agora que temos dois Callbacks distintos, e estamos trabalhando com eles, verificaremos seus funcionamentos internamente, pois se tentarmos remover mais um produto que já foi removido anteriormente, e ele trouxer outra resposta que não o sucesso, não conseguiríamos fazê-la internamente.
+
+Nesta API ainda manteremos a resposta 200, portanto este é um ponto de atenção. Se de repente tivéssemos outro código de sucesso em onResponse(), com uma resposta mal sucedida, cairíamos no else e teríamos que fazer outro tipo de tratamento.
+
+Vamos testar a remoção dos produtos no emulador?
+
+Será muito comum trabalharmos com requisições que não retornam, ou retornam algo, e caso se queira flexibilizar soluções por meio da criação de Callbacks que sejam para reutilização, será necessário lidar com estes casos diferentes. Existem várias maneiras de fazer esta flexibilização, esta não é a única.
+
+@@04
+Implementando callback sem retorno
+
+Implemente o callback genérico sem retorno. Substitua o callback da requisição de remoção para que utilize o callback sem retorno.
+Teste o App e veja se agora a remoção na API e interna funcionam como esperado.
+
+O comportamento de remoção deve funcionar como esperado. O código da atividade pode ser conferido neste commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/7900fd3246110ee4f27af15a967f73b3a210a735
+
+@@05
+Refatoração do projeto
+
+Feita a integração do aplicativo com a nossa API, aplicaremos a refatoração em nosso código, a fim de finalizarmos o projeto. Começaremos com ListaProdutosActivity.java, que de imediato perceberemos que existe um atributo DAO inutilizado por membros da Activity, pois todos os comportamentos referentes à inserção, edição, remoção e até mesmo a listagem, estão sendo feitos em ProdutoRepository(), classe que criamos para lidar com esta fonte de dados, seja na API ou internamente.
+Deste modo, poderemos deletar a linha private ProdutoDAO dao, e dado que não utilizamos mais este banco de dados na Activity, toda a inicialização pode ser enviada diretamente ao nosso ProdutoRepository, no momento em que construímos esta classe. É preciso fazer algumas adaptações: não receberemos mais uma referência de DAO, mantendo-se apenas a referência necessária para instanciarmos o banco de dados do nosso Room, de contexto, e indicaremos que o contexto será recebido via parâmetro:
+
+public ProdutoRepository(Context context) {
+    EstoqueDatabase db = EstoqueDatabase.getInstance(context);
+    dao = db.getProdutoDAO();
+    service = new EstoqueRetrofit().getProdutoService();
+}COPIAR CÓDIGO
+Em ListaProdutosActivity.java, substituiremos dao do ProdutoRepository() recebido por repository por this. Em seguida, faremos algumas extrações para deixar o código mais sucinto, como no trecho referente a repository.buscaProdutos(), para um método de mesmo nome. Da mesma forma, extrairemos as mensagens enviadas via Toast; a que se encontra em quandoFalha() ficará no método mostraErro().
+
+O Android Studio identificará um padrão em chamadas contidas na Activity, cuja diferença está apenas no conteúdo das mensagens. Em vez de extrairmos a string no método, ela virará um parâmetro e poderá ser reutilizada para outras chamadas. Aceitaremos a sugestão do programa para substituirmos os pontos identificados por ele.
+
+O único ponto que pode ser um pouco desagradável nesta abordagem é que ele deixa o nome do parâmetro como s, sem nenhum contexto ou significado. Neste caso, trocaremos por mensagem, e enviaremos o this diretamente, pois não estamos em uma referência de classe anônima.
+
+private void mostraErro(String mensagem) {
+    Toast.makeText(context: this, mensagem,
+            Toast.LENGTH_SHORT).show();
+}COPIAR CÓDIGO
+Caso futuramente queiramos alterar a abordagem de envio das mensagens, basta fazermos a modificação internamente. Há outras mensagens envidas que exigem uma interpretação do que está hardcoded. Podemos extraí-las para algumas constantes com "Ctrl + Alt + C":
+
+@Override
+public void quandoFalha(String erro) {
+    mostraErro(MENSAGEM_ERRO_BUSCA_PRODUTOS);
+}COPIAR CÓDIGO
+Faremos o mesmo no momento de remoção de produtos em configuraListaProdutos():
+
+@Override
+public void quandoFalha(String erro) {
+    mostraErro(MENSAGEM_ERRO_REMOCAO);
+}COPIAR CÓDIGO
+E em abreFormularioSalvaProduto():
+
+@Override
+public void quandoFalha(String erro) {
+    mostraErro(MENSAGEM_ERRO_SALVA);
+}COPIAR CÓDIGO
+E também em abreFormularioEditaProduto():
+
+@Override
+public void quandoFalha(String erro) {
+    mostraErro(MENSAGEM_ERRO_EDICAO);
+}COPIAR CÓDIGO
+Na parte superior do código, alteraremos as constantes que acabamos de criar para que fiquem privadas, e não públicas. E para otimizarmos importes, podemos usar "Ctrl + Alt + O". Depois, podemos extrair a ação de remover do repository de configuraListaProdutos() para o método remove(), inclusive utilizando a técnica do Method reference.
+
+adapter.setOnItemClickRemoveContextMenuListener(this::remove);COPIAR CÓDIGO
+Faremos o mesmo com a ação de salvar do repository de abreFormularioSalvaProduto(), que será extraída para o método salva():
+
+private void abreFormularioSalvaProduto() {
+    new SalvaProdutoDialog(context: this, this::salva)
+            .mostra();
+}COPIAR CÓDIGO
+E na ação de salvar, do repository de abreFormularioEditaProduto(), para o método edita(), que não ficará com Method reference por enviarmos a posicao, que neste caso não recebe via Listener de nosso Dialog.
+
+private void abreFormularioEditaProduto(int posicao, Produto produto) {
+    new EditaProdutoDialog(context: this, produto,
+            produtoCriado -> edita(posicao, produtoCriado))
+            .mostra();
+}COPIAR CÓDIGO
+Passando ao ProdutoRepository.java, aplicaremos técnicas similares de refatoração, exceto pela parte de Callback e execução, em que não há muito o que fazer, não há nada hardcoded. Poderíamos tirar as linhas em branco, ou fazer extrações para outras classes para não deixarmos todo esse código em nosso repositório, de acordo com o que fazem, como no caso de chamadas na API, por exemplo. Isso ajudaria a "enxugar" linhas de código.
+
+E em CallbackComRetorno.java extrairemos algumas mensagens para constantes, como no caso do else de onResponse(), que terá o conteúdo callback.quandoFalha(MENSAGEM_ERRO_RESPOSTA_NAO_SUCEDIDA). Da mesma forma, alteraremos o onFailure():
+
+public void onFailure(Call<T> call, Throwable t) {
+    callback.quandoFalha(erro: MENSAGEM_ERRO_FALHA_COMUNICACAO + t.getMessage());
+}COPIAR CÓDIGO
+Inclusive, como estamos usando esta mesma mensagem de falha no Callback com retorno e sem, podemos deixá-las em uma interface default, denominada MensagemCallback, e então iremos reutilizá-las. Recortaremos as constantes, que ficarão públicas mesmo, ou então com acesso restrito ao pacote, e as reutilizamos em cada um dos Callbacks criados:
+
+interface MensagensCallback {
+        String MENSAGEM_ERRO_RESPOSTA_NAO_SUCEDIDA = "Resposta mal sucedida";
+        String MENSAGEM_ERRO_FALHA_COMUNICACAO = "Falha de comunicação";
+}COPIAR CÓDIGO
+Com isso, basta realizarmos os imports correspondentes em CallbackComRetorno.java. E em CallbackSemRetorno.java faremos o mesmo — em onFailure() usaremos MENSAGEM_ERRO_FALHA_COMUNICACAO, e no else da mensagem de erro, MENSAGEM_ERRO_RESPOSTA_NAO_SUCEDIDA. Outra classe em que podemos fazer uma refatoração é EstoqueRetrofit, em que temos alguns imports inutilizados e chamadas que podem ser extraídas, como no caso da string que representa a URL base, "http://192.168.20.249:8080/", que ficará como URL_BASE.
+
+E a chamada para configurar o Interceptor logging de EstoqueRetrofit() será extraída para o método configuraClient(), em que também poderemos fazer mais extrações, caso desejado. Por fim, mudaremos para private a URL_BASE. Há a possibilidade de utilizarmos também um inspetor de código.
+
+Vamos testar o aplicativo para verificar se os comportamentos são mantidos como queremos. Incluiremos um novo produto, videogame, de valor 1200 e quantidade 8, depois o editaremos, removeremos, e rotacionaremos a tela. Conseguimos fazer a refatoração, e toda a integração necessária, e finalizamos o projeto.
+
+@@06
+Refatorando o código
+
+Refatore o código do projeto nos arquivos modificados durante o curso, como a da Activity de lista de produtos, repositório de produtos, inicialização de Retrofit e etc.
+Aplique técnicas de extração, renomeação ou qualquer outra que melhore a legibilidade do código. Sinta-se à vontade para usar o inspetor de código do Android Studio.
+
+Após refatoração, teste o App e veja se todos os comportamentos funcionam como esperado.
+
+O App deve apresentar o mesmo comportamento de antes, a diferença está na simplicidade do código. Para verificar todas as mudanças feitas em vídeo, confira o commit.
+
+https://github.com/alura-cursos/android-persistencia-web/commit/ad708d8e0bd1a4d0677d866636e0ebd4c2cfa63b
+
+@@07
+Para saber mais - Código fonte da API web
+
+Finalizamos a integração com a API web fornecida pelo curso, porém, nada impede de implementar novos comportamentos, como por exemplo, criar um end point na API que cria um produto novo ao tentar alterar um produto que não existe na API, mas existe no App desde o começo.
+Caso tenha essa curiosidade e queira testar novos desafios, faça o clone do projeto, siga as instruções via README do repositório e, além de modificar a API, faça a integração do App com a novidade da API.
+
+Leitura complementar
+Como inspiração, leia também o artigo que destaca os principais motivos ao considerar o uso de API web em Apps Android.
+
+https://github.com/alura-cursos/android-persistencia-web-api
+
+https://medium.com/collabcode/quando-considerar-o-uso-de-api-em-projetos-android-ffdb4ba9ad6
+
+@@08
+O que aprendemos?
+
+Nesta aula, aprendemos a:
+Criar Callbacks genéricos quando não tem conteúdo no body;
+Refatorar o código.
+
+@@09
+Conclusão
+
+Chegamos ao fim do curso de Persistência web no Android! E se você chegou até aqui, parabéns. Durante o curso, aprendemos bastante conteúdo considerado avançado no mundo Android, e aproveitando este momento de conclusão, iremos rever os pontos pelos quais passamos.
+Nosso primeiro problema foi a queixa do nosso cliente, que nos informou que não estava conseguindo utilizar o aplicativo, por não saber como lidar com perdas de dados.
+
+Vimos que os maiores causadores deste problema existem quando consideramos apenas uma solução de persistência interna, porque ela está, sim, suscetível a qualquer ação que prejudique estes dados, como uma limpeza no aplicativo, desinstalação do mesmo ou perda do dispositivo móvel, entre outras situações que podem resultar na perda de dados.
+
+Utilizamos a persistência web, alternativa muito bem vinda para este tipo de situação, e uma das abordagens mais comuns é a integração com APIs web, como no caso de um servidor, que opera numa arquitetura REST.
+
+Aprendemos que, para que os dados sejam mantidos mesmo se houver perda de dados, ter uma integração com uma API é muito vantajoso. No entanto, vimos que isso implica em diversos desafios.
+
+Precisamos, por exemplo, que nosso aplicativo tenha uma comunicação com web via protocolo HTTP, e com isso conseguimos fazer com que o aplicativo faça requisições HTTP. Para isso, o Android oferece várias alternativas, das quais optamos por uma biblioteca, o Retrofit.
+
+A partir dele, começamos a implementar a comunicação com a API. Configuramos o Retrofit por meio da URL base, utilizada para todas as requisições, vimos o ProdutoService, componente dedicado a fazer todas as requisições desejadas.
+
+Também vimos que é possível trabalharmos com diversas configurações, como no caso do uso de conversores diretos em vez de fazermos a conversão do produto da API manualmente.
+
+Além disso, para as requisições, precisamos de permissão da internet via manifests, e que a partir da versão 9 do Android existe um bloqueio da requisição HTTP, enquanto a HTTPS é aceita por padrão, usando-se o atributo usesCleartextTraffic.
+
+Outros detalhes impactantes envolvem a refatoração: vimos que o código de implementação com requisição web e persistência interna possui certa complexidade, exige estratégias de identificação: inicialmente buscamos produtos na API e depois internamente? Começamos salvando na API e depois internamente?
+
+Isso tudo fez com que criássemos um repositório, justamente para manter essa lógica de lidar com os dados, e quando fizemos esta implementação vimos que a complexidade do código aumentou um pouco mais, uma vez que no repositório lidamos com dados e suas fontes, interna ou externamente.
+
+Quanto à parte de atualização, quem se responsabiliza por isso é a nossa Activity, e para isto criamos diversas soluções, como Listeners, Callbacks e assim por diante, para notificarmos a Activity sem que ela tenha que lidar com os dados.
+
+Depois, flexibilizamos as soluções tanto quando há sucesso quanto quando há falha. Fomos evoluindo aos poucos, mas, realmente, não se trata de um conteúdo trivial.
+
+Aproveito para pedir um feedback seu, do que você achou do curso, se você conseguiu aproveitar e gostou da abordagem. Caso haja dúvidas, nos contate no fórum!
+
+@@10
+Projeto final
+
+Caso precise consultar o projeto final, fique à vontade em fazer o download do projeto ou acesse a branch da última aula via GitHub.
+
+https://github.com/alura-cursos/android-persistencia-web/archive/aula-6.zip
+
+https://github.com/alura-cursos/android-persistencia-web/tree/aula-6
